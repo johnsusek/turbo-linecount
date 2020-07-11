@@ -1,9 +1,9 @@
 //
 // Turbo Linecount
 // Copyright 2015, Christien Rioux
-// 
+//
 // MIT Licensed, see file 'LICENSE' for details
-// 
+//
 ///////////////////////////////////////////////
 
 #include"turbo_linecount.h"
@@ -11,14 +11,15 @@
 #include<cstring>
 #include<cstdio>
 #include<errno.h>
+#include<inttypes.h>
 #ifdef min
 #undef min
 #endif
 
 ///////////////////////////// Platform specific
-#if defined(_WIN32) 
+#if defined(_WIN32)
 
-// Windows	
+// Windows
 #define LCOPENFILE(name) CreateFile(name, GENERIC_READ, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)
 #define LCCLOSEFILE(handle) CloseHandle(handle)
 #define LCINVALIDHANDLE INVALID_HANDLE_VALUE
@@ -88,7 +89,7 @@ CLineCount::CLineCount(PARAMETERS *parameters)
 #endif
 	m_parameters.threadcount = cpucount;
 	m_parameters.buffersize = (1024 * 1024);
-	
+
 	// Override defaults if specified
 	if (parameters)
 	{
@@ -102,7 +103,7 @@ CLineCount::CLineCount(PARAMETERS *parameters)
 			m_parameters.threadcount = parameters->threadcount;
 		}
 	}
-	
+
 	init();
 }
 
@@ -207,6 +208,7 @@ bool CLineCount::close()
 	return ok;
 }
 
+bool printOffsets = false;
 
 #ifdef _WIN32
 DWORD WINAPI threadProc(LPVOID ctx)
@@ -228,6 +230,7 @@ unsigned int CLineCount::countThread(int thread_number)
 	tlc_fileoffset_t lastmapsize = 0;
 	tlc_linecount_t count = 0;
 	void *mem = NULL;
+	std::vector<u_int64_t> offsets(1024 * 1024 * 1024 * 20);
 
 	while (curoffset < m_filesize)
 	{
@@ -241,7 +244,7 @@ unsigned int CLineCount::countThread(int thread_number)
 
 		// Map view of file
 #ifdef _WIN32
-		
+
 		if (mem)
 		{
 			if (!UnmapViewOfFile(mem))
@@ -264,7 +267,7 @@ unsigned int CLineCount::countThread(int thread_number)
 		}
 		mem = MMAP(NULL, mapsize, PROT_READ, MAP_FILE | MAP_SHARED, m_fh, curoffset);
 //		printf("%p %lld %lld\n",mem, mapsize, curoffset);
-#endif		
+#endif
 		if (mem == MAP_FAILED)
 		{
 			LCSETREALLASTERROR(EINVAL, _T("memory map failed"));
@@ -275,6 +278,7 @@ unsigned int CLineCount::countThread(int thread_number)
 		// Count newlines in buffer
 		tlc_fileoffset_t windowoffset = 0;
 		size_t windowleft = mapsize;
+		uint64_t offset = 0;
 		char *ptr = (char *)mem;
 		while (windowleft > 0)
 		{
@@ -283,6 +287,10 @@ unsigned int CLineCount::countThread(int thread_number)
 			{
 				ptrnext++;
 				count++;
+				offset += (ptrnext - ptr);
+				if (printOffsets) {
+          offsets.emplace_back((uint64_t)curoffset + offset);
+				}
 				windowleft -= (ptrnext - ptr);
 				ptr = ptrnext;
 			}
@@ -304,8 +312,6 @@ unsigned int CLineCount::countThread(int thread_number)
 		// Move to next buffer
 		curoffset += stride;
 		lastmapsize = mapsize;
-
-//		printf("%lld\n", curoffset);
 	}
 
 	// Clean up memory map
@@ -333,6 +339,7 @@ unsigned int CLineCount::countThread(int thread_number)
 
 	// Save count for this thread
 	m_threadlinecounts[thread_number] = count;
+  m_threadlineoffsets[thread_number] = offsets;
 
 	return 0;
 }
@@ -360,8 +367,9 @@ bool CLineCount::createThread(int thread_number)
 	return true;
 }
 
-bool CLineCount::countLines(tlc_linecount_t & linecount)
+bool CLineCount::countLines(tlc_linecount_t & linecount, bool offsets)
 {
+	printOffsets = offsets;
 	// Determine file size
 #ifdef _WIN32
 	LARGE_INTEGER li;
@@ -408,14 +416,15 @@ bool CLineCount::countLines(tlc_linecount_t & linecount)
 
 	// Spin up threads
 	m_threads.resize(m_actual_thread_count);
-	m_threadlinecounts.resize(m_actual_thread_count);
+  m_threadlinecounts.resize(m_actual_thread_count);
+  m_threadlineoffsets.resize(m_actual_thread_count);
 	m_thread_fail = false;
 	for (int i = 0; i < m_actual_thread_count; i++)
 	{
 		if (!createThread(i))
 		{
 			setLastError(ECHILD, _T("failed to create counting thread"));
-			
+
 			m_thread_fail = true;
 
 			m_actual_thread_count = i;
@@ -435,7 +444,7 @@ bool CLineCount::countLines(tlc_linecount_t & linecount)
 #else
 		success = pthread_join(m_threads[i], NULL) == 0;
 #endif
-	
+
 		if (success)
 		{
 			complete++;
@@ -468,7 +477,16 @@ bool CLineCount::countLines(tlc_linecount_t & linecount)
 	{
 		linecount += m_threadlinecounts[i];
 	}
-	
+
+  if (printOffsets) {
+    for (std::vector<u_int64_t> row: m_threadlineoffsets) {
+      for (u_int64_t val: row) {
+        printf("%" PRId64 " ", val);
+      }
+    }
+    printf("\n");
+  }
+
 	return true;
 }
 
@@ -491,7 +509,9 @@ tlc_linecount_t CLineCount::LineCount(tlc_filehandle_t fhandle, tlc_error_t * er
 	}
 
 	tlc_linecount_t count;
-	if (!lc.countLines(count))
+	// std::vector<std::vector<uint64_t> > lineoffsets;
+
+	if (!lc.countLines(count, printOffsets))
 	{
 		if (error)
 		{
@@ -528,7 +548,8 @@ tlc_linecount_t CLineCount::LineCount(const TCHAR *filename, tlc_error_t * error
 	}
 
 	tlc_linecount_t count;
-	if (!lc.countLines(count))
+
+	if (!lc.countLines(count, printOffsets))
 	{
 		if (error)
 		{

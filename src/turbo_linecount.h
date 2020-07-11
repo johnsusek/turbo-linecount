@@ -1,9 +1,9 @@
 //
 // Turbo Linecount
 // Copyright 2015, Christien Rioux
-// 
+//
 // MIT Licensed, see file 'LICENSE' for details
-// 
+//
 ///////////////////////////////////////////////
 
 #ifndef __INC_TURBO_LINECOUNT_H
@@ -20,7 +20,7 @@
 #include<vector>
 #include<errno.h>
 
-#if defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__) 
+#if defined(__APPLE__) || defined(__linux__) || defined(__CYGWIN__)
 #define TLC_COMPATIBLE_UNIX 1
 #endif
 
@@ -57,14 +57,14 @@ typedef int tlc_error_t;
 BEGIN_TURBOLINECOUNT_NAMESPACE;
 
 ////////////// Platform specific
-#ifdef _WIN32 // Windows	
-	
+#ifdef _WIN32 // Windows
+
 	#ifdef _UNICODE
 		typedef std::wstring tlc_string_t;
 	#else
 		typedef std::string tlc_string_t;
 	#endif
-	
+
 	typedef HANDLE tlc_filehandle_t;
 	typedef long long int tlc_fileoffset_t;
 	typedef tlc_fileoffset_t tlc_linecount_t;
@@ -75,19 +75,19 @@ BEGIN_TURBOLINECOUNT_NAMESPACE;
 
 	typedef std::string tlc_string_t;
 	typedef int tlc_filehandle_t;
-	
+
 	#if (defined (__APPLE__) && defined (__MACH__))
 		typedef off_t tlc_fileoffset_t;
 		#define TLC_LINECOUNT_FMT "%lld"
 	#elif defined(_LARGEFILE64_SOURCE)
 		#if defined(__CYGWIN__)
-			typedef _off64_t tlc_fileoffset_t;	
+			typedef _off64_t tlc_fileoffset_t;
 		#else
-			typedef off64_t tlc_fileoffset_t;	
+			typedef off64_t tlc_fileoffset_t;
 		#endif
 		#ifdef __LP64__
 			#define TLC_LINECOUNT_FMT "%ld"
-		#else 
+		#else
 			#define TLC_LINECOUNT_FMT "%lld"
 		#endif
 	#else
@@ -108,6 +108,7 @@ public:
 	{
 		size_t buffersize;
 		int threadcount;
+		bool offsets;
 	};
 
 private:
@@ -127,6 +128,7 @@ private:
 	std::vector<pthread_t> m_threads;
 #endif
 	std::vector<tlc_linecount_t> m_threadlinecounts;
+	std::vector<std::vector<uint64_t>> m_threadlineoffsets;
 	bool m_thread_fail;
 
 private:
@@ -154,8 +156,8 @@ public:
 	bool open(const TCHAR * filename);
 	bool close();
 
-	bool countLines(tlc_linecount_t &linecount);
-		
+	bool countLines(tlc_linecount_t &linecount, bool printOffsets);
+
 public:
 
 	// Static utility functions
